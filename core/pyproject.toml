@@ -1,0 +1,23 @@
+[project]
+name = "assistant-core"
+version = "0.1.0"
+description = "个人助理的账本、收件箱与 To Do / 邮件接入（MCP 服务器 + 命令行）"
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.9,<2"]
+
+[project.scripts]
+assistant-core = "assistant_core.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/assistant_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

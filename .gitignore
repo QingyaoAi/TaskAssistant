@@ -1,0 +1,26 @@
+# 个人设置：只在本机（示例见 config.example.json、prefs.example.md）
+/config.json
+/prefs.md
+/PAUSE
+
+# 运行数据：账本、截图、邮件、日志、简报
+/state/
+
+# 评测：真实截图和标注只在本机；仓库里只放生成的仿真截图
+/eval/cases/*
+!/eval/cases/fixture-wechat.png
+/eval/labels.csv
+/eval/results-*.csv
+/eval/.cache/
+
+# 生成物
+/phone/dist/
+/jobs/launcher/AppIcon-preview.png
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+.DS_Store

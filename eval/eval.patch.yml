@@ -1,0 +1,4 @@
+# 评测用：去掉 assistant MCP，只看图、输出判断，不写任何东西。
+- id: mcp-assistant
+  name: '@deepseek-ai/dsh-mcp-client'
+  disabled: true

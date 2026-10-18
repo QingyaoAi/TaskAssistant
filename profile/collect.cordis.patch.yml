@@ -1,0 +1,84 @@
+# 个人助理的「收集」作业（inbox / mail）。由 jobs/run.py 以
+#   DSH_HOME=~/.dsh-assistant dsh --profile collect --json "<作业指令>"
+# 在项目目录下调用，每次一个作业，跑完退出。
+#
+# 截图和邮件是别人写的内容，会直接进入这个会话。所以这里只留：读文件、看图、skill，
+# 以及 assistant MCP（认领、建任务、结束批次）。shell、网络、子 agent、工作流全部关掉；
+# 沙箱只读——所有写入都经过 assistant-core，由代码决定能写什么。
+# 本文件由 install.sh 从项目里的 profile/collect.cordis.patch.yml 复制过来（__PROJECT__ 换成项目目录），改那份。
+
+- insert:
+    - id: mcp-assistant
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: assistant
+        transport: stdio
+        command: '__PROJECT__/core/.venv/bin/assistant-core'
+        args: [ 'serve' ]
+        toolCallTimeoutMs: 300000
+        # MCP 没起来就别跑：否则模型可能「成功」地什么都没做。
+        failOnStartupError: true
+
+# ── 关掉不可信内容不该碰到的工具 ────────────────────────────────────────────
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: true
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: true
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+  disabled: true
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  disabled: true
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  disabled: true
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  disabled: true
+- id: tool-subagent-control
+  name: '@deepseek-ai/dsh-tool-subagent-control'
+  disabled: true
+- id: tool-subagent-list-agents
+  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+  disabled: true
+- id: tool-workflow
+  name: '@deepseek-ai/dsh-tool-workflow'
+  disabled: true
+- id: tool-plugin-manager
+  name: '@deepseek-ai/dsh-plugin-manager/tools'
+  disabled: true
+- id: tool-working-directory
+  name: '@deepseek-ai/dsh-tool-working-directory'
+  disabled: true
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+  disabled: true
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  disabled: true
+
+# 截图和邮件都是私人内容：不把完整会话日志随请求上传。
+- id: session-log-deepseek
+  name: '@deepseek-ai/dsh-session-log-deepseek'
+  config:
+    enabled: false
+
+# 无人值守：不审批；文件系统只读（写入都走 assistant-core）。
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: never
+    defaultPreset: read-only
+
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    reasoningEffort: high

@@ -1,0 +1,21 @@
+{
+  "lists": {
+    "inbox": "Inbox-ToDo",
+    "brief": "Assistant",
+    "direct": []
+  },
+  "mail": {
+    "sources": [
+      {"folder": "imap://me@example.com@imap.example.com/INBOX", "match": ["flagged", "tagged"]},
+      {"folder": "imap://me@gmail.com@imap.gmail.com/[Gmail]/Starred", "match": ["all"]}
+    ],
+    "self_addresses": ["me@example.com", "me@gmail.com"],
+    "lookback_days": 14,
+    "max_per_run": 20
+  },
+  "brief": {
+    "reminder_time": "07:30"
+  },
+  "quiet_seconds": 45,
+  "batch_gap_seconds": 60
+}
