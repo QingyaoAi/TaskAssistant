@@ -200,10 +200,12 @@ class FakeToDo:
         self.lists: dict[str, dict[str, dict]] = {}
         self.n = 0
 
-    def add(self, lst, title, due=None, note=''):
+    def add(self, lst, title, due=None, note='', steps=(), **extra):
         self.n += 1
         tid = f'id-{self.n}'
-        self.lists.setdefault(lst, {})[tid] = {'id': tid, 'title': title, 'due': due, 'completed': False, 'note': note}
+        steps = [{'id': f'{tid}-s{i}', 'text': s, 'checked': False} for i, s in enumerate(steps)]
+        self.lists.setdefault(lst, {})[tid] = {'id': tid, 'title': title, 'due': due, 'completed': False, 'note': note,
+                                               'steps': steps, **extra}
         return tid
 
     async def __aenter__(self):
@@ -226,18 +228,30 @@ class FakeToDo:
         if tool == 'list_tasks':
             want = args.get('status', 'open')
             return {'tasks': [dict(t) for t in reversed(tasks.values())
-                              if want == 'all' or t['completed'] == (want == 'completed')]}
+                              if (want == 'all' or t['completed'] == (want == 'completed'))
+                              and args.get('title_contains', '') in t['title']]}
         if tool == 'create_task':
-            return {'id': self.add(args['list'], args['title'], args.get('due_date'), args.get('note', ''))}
+            extra = {k: v for k, v in (('reminder', args.get('reminder')),
+                                       ('importance', 'high' if args.get('important') else None)) if v}
+            return {'id': self.add(args['list'], args['title'], args.get('due_date'), args.get('note', ''),
+                                   args.get('steps') or (), **extra)}
         if args['task_id'] not in tasks:
             raise McpError('not found')
+        task = tasks[args['task_id']]
         if tool == 'get_task':
-            return {'task': dict(tasks[args['task_id']])}
+            return {'task': dict(task, steps=[dict(st) for st in task['steps']])}
         if tool == 'update_task':
-            tasks[args['task_id']].update({k: v for k, v in args.items() if k in ('title', 'completed', 'due')})
+            task.update({k: v for k, v in args.items() if k in ('title', 'completed', 'due')})
             return {}
         if tool == 'delete_task':
             del tasks[args['task_id']]
+            return {}
+        if tool == 'add_step':
+            task['steps'].append({'id': f"{task['id']}-s{len(task['steps'])}", 'text': args['text'],
+                                  'checked': args['checked']})
+            return {}
+        if tool == 'update_step':
+            next(st for st in task['steps'] if st['id'] == args['step_id'])['checked'] = args['checked']
             return {}
         raise AssertionError(tool)
 
@@ -262,7 +276,7 @@ def test_today_list_mirrors_my_day(tmp_path, monkeypatch):
     d = fake.add('Academic-ToDo', '报销', iso(-3))              # 过期 3 天
     fake.add('Academic-ToDo', '早就过期', iso(-30))             # 过期太久
     fake.add('Academic-ToDo', '没截止')
-    fake.add('Today', '我自己加的')                              # 你自己放进 Today 的，不碰
+    fake.add('Today', '我自己加的')                              # 你自己放进 Today 的，当天不碰
     run = lambda d: asyncio.run(today.refresh(cfg, led, today=d))  # noqa: E731
 
     assert run(day)['added'] == 3
@@ -279,9 +293,10 @@ def test_today_list_mirrors_my_day(tmp_path, monkeypatch):
 
     fake.lists['Academic-ToDo'][d]['due'] = iso(10)              # 原任务改了截止日
     r = run(day + timedelta(days=1))                             # 第二天
-    assert r['removed'] == 1
-    assert fake.titles('Today') == sorted(['回王老师 · 今天截止', '我自己加的',      # 删掉的第二天还该处理：放回来
-                                          '写综述 · 后天截止'])                # 进了两天的窗口
+    assert (r['removed'], r['moved']) == (1, 1)
+    assert fake.titles('Today') == sorted(['回王老师 · 今天截止',    # 删掉的第二天还该处理：放回来
+                                          '写综述 · 后天截止'])     # 进了两天的窗口
+    assert '我自己加的' in fake.titles('Inbox-ToDo')                # 前一天没做完：移回 Inbox
     assert fake.titles('Today', completed=True) == ['交审稿意见 · 今天截止']
 
 
@@ -299,3 +314,51 @@ def test_today_adopts_copy_missing_from_ledger(tmp_path, monkeypatch):
     fake.add('Today', today.mirror_title(src, SUNDAY), note=today.mirror_note(src))   # 建了副本但没来得及记账
     assert asyncio.run(today.refresh(cfg, led, today=SUNDAY))['added'] == 0
     assert len(led.today_open()) == 1
+
+
+def test_today_moves_own_unfinished_back_to_inbox(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import timedelta
+    from assistant_core import today, todo
+    fake = FakeToDo()
+    monkeypatch.setattr(todo, 'client', lambda cfg: fake)
+    cfg = Config(dict(DEFAULTS, lists=dict(DEFAULTS['lists'], allowed=['Academic-ToDo'], inbox='Inbox-ToDo')))
+    led = Ledger(tmp_path / 'l.db')
+    fake.lists['Inbox-ToDo'] = {}
+    day, nxt = SUNDAY, SUNDAY + timedelta(days=1)
+    big = fake.add('Today', '起草征稿启事', nxt.isoformat(), note='来源：邮件\nref: mail-1', steps=['回信', '起草'],
+                   importance='high', reminder='2000-01-01 09:00')
+    fake.lists['Today'][big]['steps'][0]['checked'] = True
+    fake.add('Today', '续签合同', attachments=[{'name': '合同.pdf'}])   # 附件建不出来
+    done = fake.add('Today', '已经做完')
+    fake.lists['Today'][done]['completed'] = True
+    run = lambda d: asyncio.run(today.refresh(cfg, led, today=d))  # noqa: E731
+
+    assert run(day)['moved'] == 0                                # 放进来当天不动
+    fake.add('Today', '晚上才加的')
+    r = run(nxt)
+    assert r['moved'] == 1 and '续签合同' in r['problems'][0]
+    assert sorted(t['title'] for t in fake.lists['Today'].values()) == sorted(
+        ['已经做完', '续签合同', '晚上才加的', '起草征稿启事 · 今天截止'])   # 截止今天：照常放副本
+    [moved] = fake.lists['Inbox-ToDo'].values()
+    assert (moved['title'], moved['due'], moved['note'], moved['importance']) == \
+           ('起草征稿启事', nxt.isoformat(), '来源：邮件\nref: mail-1', 'high')
+    assert [(st['text'], st['checked']) for st in moved['steps']] == [('回信', True), ('起草', False)]
+    assert 'reminder' not in moved                               # 已经响过的提醒不再带上
+
+
+def test_today_move_back_resumes_half_built_copy(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import timedelta
+    from assistant_core import today, todo
+    fake = FakeToDo()
+    monkeypatch.setattr(todo, 'client', lambda cfg: fake)
+    cfg = Config(dict(DEFAULTS, lists=dict(DEFAULTS['lists'], allowed=['Academic-ToDo'], inbox='Inbox-ToDo')))
+    led = Ledger(tmp_path / 'l.db')
+    fake.add('Today', '回王老师', note='关于报销', steps=['查票', '回信'])
+    asyncio.run(today.refresh(cfg, led, today=SUNDAY))
+    fake.add('Inbox-ToDo', '回王老师', note='关于报销', steps=['查票'])      # 上次建到一半就崩了
+    assert asyncio.run(today.refresh(cfg, led, today=SUNDAY + timedelta(days=1)))['moved'] == 1
+    assert fake.titles('Today') == []
+    [moved] = fake.lists['Inbox-ToDo'].values()
+    assert [st['text'] for st in moved['steps']] == ['查票', '回信']

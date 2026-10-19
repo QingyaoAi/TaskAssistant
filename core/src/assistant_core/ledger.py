@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS today (
   closed_on  TEXT
 );
 CREATE INDEX IF NOT EXISTS today_status ON today(status, closed_on);
+CREATE TABLE IF NOT EXISTS today_own (
+  task_id    TEXT PRIMARY KEY,          -- 你自己放进 Today 的未完成任务
+  first_seen TEXT NOT NULL              -- 第一次在 Today 里看到它的本地日期；过了这天还没做完就移回 Inbox
+);
 """
 
 
@@ -204,6 +208,15 @@ class Ledger:
     def today_close(self, mirror_id: str, status: str, day: str) -> None:
         with self.tx() as db:
             db.execute('UPDATE today SET status=?, closed_on=? WHERE mirror_id=?', (status, day, mirror_id))
+
+    def today_own_seen(self, task_ids: list[str], day: str) -> dict[str, str]:
+        """记下 Today 里你自己放的未完成任务，返回 id → 第一次看到的日期。已经不在的忘掉。"""
+        ids = set(task_ids)
+        with self.tx() as db:
+            db.executemany('INSERT OR IGNORE INTO today_own(task_id, first_seen) VALUES (?,?)', [(i, day) for i in ids])
+            seen = dict(db.execute('SELECT task_id, first_seen FROM today_own').fetchall())
+            db.executemany('DELETE FROM today_own WHERE task_id=?', [(i,) for i in seen if i not in ids])
+        return {i: d for i, d in seen.items() if i in ids}
 
     # ---- 运行记录 ----------------------------------------------------------
     def run_start(self, job: str) -> int:

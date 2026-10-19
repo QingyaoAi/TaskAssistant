@@ -4,7 +4,7 @@
     assistant-core init                  建账本、建 Inbox-ToDo / Today 清单
     assistant-core ready inbox|mail      有没有要处理的（0 有，1 没有，3 Thunderbird 不可用）
     assistant-core finalize inbox|mail   作业结束：没处理完的批次放回队列
-    assistant-core today                 对齐 Today 清单（今天该处理的放进来，勾掉的同步回原任务）
+    assistant-core today                 对齐 Today 清单（今天该处理的放进来，勾掉的同步回原任务，前一天没做完的移回 Inbox）
     assistant-core brief [--print]       生成早上的简报（只存在 state/briefs/）
     assistant-core maintain              重试未写入的任务、清理过期文件、备份账本
     assistant-core status                看看最近的情况

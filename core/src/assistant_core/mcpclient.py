@@ -1,7 +1,7 @@
 """以客户端身份调用别的 MCP 服务器（To Do、Thunderbird 桥）。
 
 模型看不到这些服务器：assistant-core 只把自己挑过的几种操作交给模型，删除不在其中
-（代码自己只删 Today 清单里助理建的副本，见 today.py）。
+（代码自己只删助理建的副本、和已经原样移回 Inbox 的 Today 任务，见 today.py）。
 """
 from __future__ import annotations
 

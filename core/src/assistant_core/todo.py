@@ -1,4 +1,5 @@
-"""Microsoft To Do：通过 mstodo MCP 只做建、读、改。唯一的删除是 Today 清单里助理自己建的副本。"""
+"""Microsoft To Do：通过 mstodo MCP 只做建、读、改。删除只有 today.py 的两种：助理自己建的副本，
+和已经原样移回 Inbox 的 Today 任务。"""
 from __future__ import annotations
 
 from .config import Config
@@ -52,8 +53,21 @@ async def update_task(c: McpClient, list_name: str, task_id: str, **fields) -> N
     await c.call('update_task', {'list': list_name, 'task_id': task_id, **fields})
 
 
+async def add_step(c: McpClient, list_name: str, task_id: str, text: str, checked: bool = False) -> None:
+    await c.call('add_step', {'list': list_name, 'task_id': task_id, 'text': text, 'checked': checked})
+
+
+async def check_step(c: McpClient, list_name: str, task_id: str, step_id: str) -> None:
+    await c.call('update_step', {'list': list_name, 'task_id': task_id, 'step_id': step_id, 'checked': True})
+
+
 async def delete_own_copy(c: McpClient, list_name: str, task_id: str) -> None:
-    """只给 today.py 删 Today 清单里助理自己建的副本用；别的任务一律不删。"""
+    """只给 today.py 删助理自己建的副本用；别的任务一律不删。"""
+    await c.call('delete_task', {'list': list_name, 'task_id': task_id})
+
+
+async def delete_moved(c: McpClient, list_name: str, task_id: str) -> None:
+    """只给 today.py 用：Today 里你自己放的任务已经原样建进 Inbox、核对过之后，删掉 Today 里的这条。"""
     await c.call('delete_task', {'list': list_name, 'task_id': task_id})
 
 
