@@ -20,7 +20,9 @@ STATE = PROJECT / 'state'
 DEFAULTS = {
     'timezone': 'Asia/Shanghai',
     # 快捷指令「存储文件」不询问位置时，写到 iCloud 云盘的「快捷指令」文件夹下。
-    'inbox_dir': '~/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/个人助理/inbox',
+    'inbox_dir': '~/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/TaskAssistant/inbox',
+    # 2026-10-19 以前生成的快捷指令存到「个人助理/inbox」，照样收；手机和 Mac 都换成新版后可以清空。
+    'legacy_inbox_dirs': ['~/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/个人助理/inbox'],
     # 收件箱连续这么多秒没有新文件、文件大小也不再变化，才开始处理（给连续截屏留时间）。
     'quiet_seconds': 45,
     # 前后相隔不超过这么多秒的截图归为一批，一起交给模型理解。
@@ -28,7 +30,8 @@ DEFAULTS = {
     'max_image_edge': 2048,
     'lists': {
         'inbox': 'Inbox-ToDo',
-        'brief': 'Assistant',
+        # 今天该处理的任务各复制一条到这里（代替「我的一天」，见 today.py）。
+        'today': 'Today',
         'allowed': ['Academic-ToDo', 'Students-ToDo', 'Teaching-ToDo', 'Project-ToDo', 'Logistics-ToDo',
                     'Life-ToDo', 'CanWait-ToDo', 'Reading list', 'Idea pool', 'Fun-ToDo'],
         # 影子模式：为空时所有任务都进 Inbox-ToDo。准确率达标后再把清单名加进来直投。
@@ -49,7 +52,9 @@ DEFAULTS = {
         'max_per_run': 20,
         'body_chars': 3000,
     },
-    'brief': {'reminder_time': '07:30'},
+    # 放进 Today 的：截止在今天之后 ahead_days 天内、或已过期不超过 overdue_days 天的未完成任务。
+    # ahead_days 和 reminders.lead_days 一致：截止前 2 天提醒的那天起就放进来。
+    'today': {'ahead_days': 2, 'overdue_days': 7},
     # 有明确时间节点的任务：截止前 lead_days 天、早上 hour 点在 To Do 里提醒（手机会弹通知）。
     'reminders': {'lead_days': 2, 'hour': 9},
     'retention_days': {'archive': 30, 'failed': 30, 'dsh': 30, 'logs': 90, 'briefs': 90},
@@ -80,6 +85,10 @@ class Config:
     @property
     def inbox_dir(self) -> Path:
         return _expand(self.raw['inbox_dir'])
+
+    @property
+    def legacy_inbox_dirs(self) -> list[Path]:
+        return [_expand(p) for p in self.raw['legacy_inbox_dirs']]
 
     @property
     def lists(self) -> dict:

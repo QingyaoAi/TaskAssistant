@@ -115,15 +115,17 @@ def group(units: list[Unit], gap_seconds: int) -> list[list[Unit]]:
 
 
 def sources(cfg: Config) -> list[Path]:
-    """手机可能把文件存到的地方：inbox 本身，以及 iCloud 同名冲突时生成的「个人助理 2」之类的副本、
-    误存在「个人助理」根目录里的文件（旧版快捷指令会存成 个人助理/inbox.png）。"""
-    inbox = cfg.inbox_dir
-    root = inbox.parent
-    found = [inbox, root]
-    if root.parent.exists():
-        for twin in sorted(root.parent.glob(root.name + ' *')):
-            if twin.is_dir():
-                found += [twin / inbox.name, twin]
+    """手机可能把文件存到的地方：inbox 本身，以及 iCloud 同名冲突时生成的「TaskAssistant 2」之类的副本、
+    误存在「TaskAssistant」根目录里的文件（快捷指令路径写错时会存成 TaskAssistant/inbox.png）。
+    旧版快捷指令用的「个人助理/inbox」（legacy_inbox_dirs）也照这样找。"""
+    found = []
+    for inbox in (cfg.inbox_dir, *cfg.legacy_inbox_dirs):
+        root = inbox.parent
+        found += [inbox, root]
+        if root.parent.exists():
+            for twin in sorted(root.parent.glob(root.name + ' *')):
+                if twin.is_dir():
+                    found += [twin / inbox.name, twin]
     return [d for d in found if d.is_dir()]
 
 

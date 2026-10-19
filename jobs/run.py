@@ -3,7 +3,7 @@
 
     run.py inbox      收件箱有截图就交给模型处理（等收件箱安静 45 秒再开始）
     run.py mail       有新邮件就交给模型处理（工作日 8–22 点；周末每 2 小时最多一次）
-    run.py morning    生成早上的简报（纯代码）
+    run.py morning    把今天该处理的任务放进 Today 清单，简报只存本机（纯代码）
     run.py maintain   重试、清理、备份（纯代码）
     加 --force 跳过时间窗口。
 
@@ -31,6 +31,7 @@ PROMPT = {
     'mail': '运行作业 mail：先读取 skill「assistant-mail」，然后严格按它处理新邮件，直到 mail_claim 返回空。',
 }
 MAX_LOOPS = 3
+TODAY_EVERY = 30 * 60  # 收件箱、邮件作业顺带对齐 Today 清单的最短间隔（建了新任务时马上对）
 
 
 def stamp() -> str:
@@ -123,10 +124,24 @@ def finalize(job: str) -> int:
     return result.stdout.count('"batch_id"')
 
 
+def sync_today(force: bool) -> str:
+    """把你在 Today 里勾掉的同步回原任务、把新到期的放进来。"""
+    marker = STATE / 'locks' / 'today.sync'
+    if not force and marker.exists() and time.time() - marker.stat().st_mtime < TODAY_EVERY:
+        return ''
+    marker.touch()
+    r = core('today', timeout=300)
+    return f'Today：{r.stdout.strip()[-200:]}' if r.returncode == 0 else f'Today 对齐出错：{r.stderr.strip()[-200:]}'
+
+
 def work(job: str) -> tuple:
     if job == 'morning':
-        r = core('brief', timeout=TIMEOUT[job])
-        return ('ok', r.stdout.strip()[-300:]) if r.returncode == 0 else ('failed', r.stderr.strip()[-300:])
+        today = core('today', timeout=TIMEOUT[job])
+        (STATE / 'locks' / 'today.sync').touch()
+        core('brief', timeout=TIMEOUT[job])  # 只存本机，出错不影响 Today
+        if today.returncode != 0:
+            return 'failed', today.stderr.strip()[-300:]
+        return 'ok', f'Today：{today.stdout.strip()[-300:]}'
     if job == 'maintain':
         r = core('maintain', timeout=TIMEOUT[job])
         return ('ok', r.stdout.strip()[-300:]) if r.returncode == 0 else ('failed', r.stderr.strip()[-300:])
@@ -167,6 +182,12 @@ def main(argv: list) -> int:
         status, detail = work(job)
     except Exception as e:  # noqa: BLE001 —— 调度器自己出错也要记下来并通知
         status, detail = 'failed', f'{type(e).__name__}: {e}'
+    if job in ('inbox', 'mail'):
+        try:
+            note = sync_today(force=status == 'ok')
+        except Exception as e:  # noqa: BLE001 —— Today 没对上不算作业失败，下次再对
+            note = f'Today 对齐出错：{type(e).__name__}: {e}'
+        detail = '；'.join(p for p in (detail, note) if p)
     core('run-finish', run_id, status, detail)
     log(job, f'{status} {detail}')
     if status in ('failed', 'timeout'):

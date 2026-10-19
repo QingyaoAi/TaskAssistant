@@ -37,9 +37,8 @@ step "密钥（从你平时用的 ~/.dsh 复制，不打印）"
 step "账本、To Do 清单、邮件水位"
 core/.venv/bin/assistant-core init
 
-step "快捷指令"
-if [ ! -f "phone/dist/记待办.shortcut" ]; then /usr/bin/python3 phone/build_shortcut.py; fi
-ls phone/dist
+step "快捷指令（内容变了才重新导入 Mac 上的「快捷指令」，iCloud 同步到 iPhone）"
+/usr/bin/python3 phone/build_shortcut.py --install
 
 step "作业启动器（~/Applications/TaskAssistant.app）"
 if [ ! -x "$HOME/Applications/TaskAssistant.app/Contents/MacOS/TaskAssistant" ]; then jobs/launcher/build.sh; fi
@@ -51,10 +50,9 @@ fi
 
 cat <<EOF
 
-装好了。接下来在手机上：
-  1. 打开 phone/dist 里的快捷指令导入（在 Mac 上双击导入，iCloud 会同步到 iPhone）。
-  2. 在微信界面运行「记待办」就会截屏生成任务：用 Siri、操作按钮或辅助触控运行，
-     不要在主屏幕点图标（那样截到的是主屏幕）。详见 README.md。
+装好了。快捷指令已导入 Mac 上的「快捷指令」，iCloud 会同步到 iPhone。接下来在手机上：
+  在微信界面运行「记待办」就会截屏生成任务：用 Siri、操作按钮或辅助触控运行，
+  不要在主屏幕点图标（那样截到的是主屏幕）。详见 README.md。
 暂停所有作业：touch "$PROJECT/PAUSE"；恢复：rm "$PROJECT/PAUSE"。
 卸载后台作业：/usr/bin/python3 jobs/launchd.py uninstall
 EOF

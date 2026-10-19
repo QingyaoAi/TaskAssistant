@@ -1,4 +1,4 @@
-"""Microsoft To Do：通过 mstodo MCP 只做建、读、改，不删。"""
+"""Microsoft To Do：通过 mstodo MCP 只做建、读、改。唯一的删除是 Today 清单里助理自己建的副本。"""
 from __future__ import annotations
 
 from .config import Config
@@ -50,6 +50,11 @@ async def get_task(c: McpClient, list_name: str, task_id: str) -> dict:
 
 async def update_task(c: McpClient, list_name: str, task_id: str, **fields) -> None:
     await c.call('update_task', {'list': list_name, 'task_id': task_id, **fields})
+
+
+async def delete_own_copy(c: McpClient, list_name: str, task_id: str) -> None:
+    """只给 today.py 删 Today 清单里助理自己建的副本用；别的任务一律不删。"""
+    await c.call('delete_task', {'list': list_name, 'task_id': task_id})
 
 
 async def list_names(c: McpClient) -> list[str]:

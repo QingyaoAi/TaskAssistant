@@ -1,6 +1,7 @@
 """每天早上的简报。纯代码汇总，不调用模型。
 
-写成 Assistant 清单里的一条任务（带提醒，手机会弹通知），同时存一份到 state/briefs/。
+只存在本机 state/briefs/（assistant-core brief --print 可以看），不再发到 To Do、不提醒；
+今天该处理的任务改由 today.py 放进 Today 清单。
 """
 from __future__ import annotations
 
@@ -118,33 +119,9 @@ def compose(cfg: Config, data: dict) -> tuple[str, str]:
     return title, '\n'.join(out)
 
 
-async def publish(cfg: Config, title: str, text: str) -> str:
-    today_mark = title.split(' 今日简报')[0]
-    now = datetime.now(cfg.tz)
-    hh, mm = map(int, cfg.raw['brief']['reminder_time'].split(':'))
-    remind = max(now.replace(hour=hh, minute=mm, second=0, microsecond=0), now + timedelta(minutes=2))
-    name = cfg.lists['brief']
-    async with todo.client(cfg) as c:
-        existing = None
-        for t in await todo.list_tasks(c, name, status='open', limit=50):
-            if not t.get('title', '').startswith(BRIEF_MARK):
-                continue
-            if t['title'].startswith(today_mark):
-                existing = t
-            else:
-                await todo.update_task(c, name, t['id'], completed=True)
-        if existing:
-            await todo.update_task(c, name, existing['id'], note=text)
-            return 'updated'
-        await todo.create_task(c, name, title, text, reminder=remind.strftime('%Y-%m-%d %H:%M'))
-        return 'created'
-
-
 async def run(cfg: Config, ledger: Ledger, dry_run: bool = False) -> str:
     data = await gather(cfg, ledger)
     title, text = compose(cfg, data)
-    (state_dir('briefs') / f"{data['today'].isoformat()}.md").write_text(f'# {title}\n\n{text}\n')
-    if dry_run:
-        return f'{title}\n\n{text}'
-    status = await publish(cfg, title, text)
-    return f'{status}: {title}'
+    path = state_dir('briefs') / f"{data['today'].isoformat()}.md"
+    path.write_text(f'# {title}\n\n{text}\n')
+    return f'{title}\n\n{text}' if dry_run else f'saved: {path.name}'

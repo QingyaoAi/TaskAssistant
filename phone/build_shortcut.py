@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """生成并签名个人助理的快捷指令（做法同「快捷添加日历」）。
 
-    python3 phone/build_shortcut.py        输出到 phone/dist/
+    python3 phone/build_shortcut.py                    生成并签名，输出到 phone/dist/
+    python3 phone/build_shortcut.py --install          只把内容变了的重新生成，并导入 Mac 上的「快捷指令」
+                                                       （iCloud 同步到 iPhone）；install.sh 每次都跑这个
+    python3 phone/build_shortcut.py --install --force  全部重新导入（只改了图标、分享菜单这类动作以外的设置时用）
+
+导入不是原地替换，而是新建一条同名的：Siri 按名字找，照常能用；iPhone 上操作按钮、辅助触控
+绑定的可能要重新选一次。所以内容没变就不导入。
 
 生成四个：
   记待办          运行时截下当前屏幕存进收件箱（要在微信界面里用 Siri、操作按钮或辅助触控运行）；
@@ -10,15 +16,21 @@
   口述待办        Siri：「嘿 Siri，口述待办」，只听写一句话。
   记待办 (Mac)    Mac 上框选截图（需要在快捷指令设置里允许运行脚本）。
 
-所有文件都存进 iCloud 云盘「快捷指令」文件夹下的 /个人助理/inbox/，文件名带类型和时间：
+所有文件都存进 iCloud 云盘「快捷指令」文件夹下的 /TaskAssistant/inbox/，文件名带类型和时间：
   ss-20261018-143212-4821.png      截图
   sp-20261018-143212-4821.png      截图（＋ 同名 -note.txt 补充 / -clip.txt 剪贴板）
   sh-20261018-143212-4821-1.jpg    分享（每个分享项一个序号）
   vo-20261018-143212-4821.txt      口述
   mc-20261018-143212-4821.png      Mac 截图
 """
+from __future__ import annotations
+
+import json
 import os
 import plistlib
+import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -28,9 +40,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DIST = HERE / 'dist'
-FOLDER = '/个人助理/inbox/'
+SHORTCUTS_DB = Path.home() / 'Library' / 'Shortcuts' / 'Shortcuts.sqlite'
+UUID_RE = re.compile(r'[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}')
+FOLDER = '/TaskAssistant/inbox/'
 ICON = {'WFWorkflowIconStartColor': 4282601983, 'WFWorkflowIconGlyphNumber': 61440}
-MAC_INBOX = '$HOME/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/个人助理/inbox'
+MAC_INBOX = '$HOME/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/TaskAssistant/inbox'
 OBJ = '￼'  # 文本里放变量的占位符
 
 
@@ -81,8 +95,8 @@ def stamp_actions() -> tuple:
 def save(item: dict, *name_parts) -> list:
     """存进收件箱（不询问位置、不覆盖）。
 
-    「存储文件」把路径的最后一段当文件名、自动补扩展名（实测：路径写成 /个人助理/inbox/ 会存成
-    个人助理/inbox.png），所以文件名直接写进路径，不用「设定名称」。
+    「存储文件」把路径的最后一段当文件名、自动补扩展名（实测：路径写成 /TaskAssistant/inbox/ 会存成
+    TaskAssistant/inbox.png），所以文件名直接写进路径，不用「设定名称」。
     """
     return [
         action('documentpicker.save', UUID=uid(), WFInput=attachment(item), WFAskWhereToSave=False,
@@ -192,11 +206,81 @@ def build(name: str, wf: dict, attempts: int = 5) -> Path:
     raise RuntimeError(f'{name} 签名失败')
 
 
-def main() -> int:
-    for name, wf in [('记待办', quick()), ('记待办＋', plus()), ('口述待办', voice()), ('记待办 (Mac)', mac())]:
-        print('已生成：', build(name, wf))
+SHORTCUTS = {'记待办': quick, '记待办＋': plus, '口述待办': voice, '记待办 (Mac)': mac}
+
+
+def normalized(actions: list) -> str:
+    """每次生成的 UUID 都不一样：按出现顺序换成编号再比，动作没变就相等。"""
+    ids: dict[str, str] = {}
+    text = json.dumps(actions, sort_keys=True, ensure_ascii=False)
+    return UUID_RE.sub(lambda m: ids.setdefault(m[0], f'#{len(ids)}'), text)
+
+
+def installed() -> dict | None:
+    """Mac 上「快捷指令」库里每个快捷指令的动作（normalized）。读不了返回 None。"""
+    if not SHORTCUTS_DB.exists():
+        return None
+    with tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+        for f in SHORTCUTS_DB.parent.glob(SHORTCUTS_DB.name + '*'):  # 连 -wal、-shm 一起拷，只读副本
+            shutil.copy(f, tmp)
+        try:
+            db = sqlite3.connect(Path(tmp) / SHORTCUTS_DB.name)
+            rows = db.execute('SELECT s.ZNAME, a.ZDATA FROM ZSHORTCUT s JOIN ZSHORTCUTACTIONS a ON a.ZSHORTCUT = s.Z_PK '
+                              'WHERE s.ZTOMBSTONED = 0').fetchall()
+            db.close()
+        except sqlite3.Error:
+            return None
+    out = {}
+    for name, data in rows:
+        try:
+            out[name] = normalized(plistlib.loads(data))
+        except (plistlib.InvalidFileException, ValueError, TypeError):
+            continue
+    return out
+
+
+def install(force: bool = False, wait: float = 120) -> int:
+    """内容变了的重新签名、导入，并等到库里确实是新的为止。"""
+    have = installed()
+    generated = {name: make() for name, make in SHORTCUTS.items()}
+    stale = {name: wf for name, wf in generated.items()
+             if force or have is None or have.get(name) != normalized(wf['WFWorkflowActions'])}
+    if not stale:
+        print('快捷指令都是最新的，不用重新添加')
+        return 0
+    if have is None:
+        print('读不到 Mac 上「快捷指令」的库，没法确认哪些要更新，全部重新导入')
+    failed = []
+    for name, wf in stale.items():
+        subprocess.run(['open', str(build(name, wf))], check=True)
+        if have is None:
+            print(f'已打开：{name}（弹出窗口的话点「添加快捷指令」或「替换」）')
+            continue
+        want, start, hinted = normalized(wf['WFWorkflowActions']), time.monotonic(), False
+        while (installed() or {}).get(name) != want:
+            if time.monotonic() - start > wait:
+                failed.append(name)
+                break
+            if not hinted and time.monotonic() - start > 10:
+                print(f'  {name}：弹出了导入窗口的话，请点「添加快捷指令」或「替换」')
+                hinted = True
+            time.sleep(2)
+        else:
+            print(f'已更新：{name}')
+    print('iCloud 会同步到 iPhone。重新导入的是新建的快捷指令：Siri 照常能用；'
+          'iPhone 上的操作按钮、辅助触控如果不灵了，重新选一次「记待办」。')
+    if failed:
+        print(f"没等到导入完成：{'、'.join(failed)}。点完窗口后再运行一次 {Path(__file__).name} --install")
+    return 1 if failed else 0
+
+
+def main(argv: list) -> int:
+    if '--install' in argv:
+        return install(force='--force' in argv)
+    for name, make in SHORTCUTS.items():
+        print('已生成：', build(name, make()))
     return 0
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

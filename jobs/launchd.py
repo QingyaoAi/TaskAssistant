@@ -6,9 +6,9 @@
     launchd.py status      看加载状态
 
 作业：
-  inbox     收件箱有变化就运行（WatchPaths），另每 10 分钟兜底
+  inbox     收件箱有变化就运行（WatchPaths），另每 10 分钟兜底；顺带对齐 Today 清单（最多 30 分钟一次）
   mail      每 30 分钟（时间窗口由 run.py 判断：工作日 8–22 点，周末每 2 小时）
-  morning   每天 07:00 生成简报（Mac 睡着就醒来后补跑一次）
+  morning   每天 07:00 把今天该处理的任务放进 Today 清单（Mac 睡着就醒来后补跑一次）
   maintain  每天 04:30 重试、清理、备份
 """
 import os
@@ -19,11 +19,14 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 AGENTS = Path.home() / 'Library' / 'LaunchAgents'
-INBOX = Path.home() / 'Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/个人助理/inbox'
+INBOX = Path.home() / 'Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/TaskAssistant/inbox'
+# 2026-10-19 以前生成的快捷指令存到这里（同 config.py 的 legacy_inbox_dirs）。
+LEGACY_INBOX = INBOX.parents[1] / '个人助理' / 'inbox'
 LABEL = 'local.taskassistant.{}'
 JOBS = {
-    # 连「个人助理」根目录一起监听：iCloud 同名冲突或旧版快捷指令可能把文件存在那里。
-    'inbox': {'WatchPaths': [str(INBOX), str(INBOX.parent)], 'StartInterval': 600},
+    # 连「TaskAssistant」根目录一起监听：iCloud 同名冲突或快捷指令路径写错时可能把文件存在那里。
+    'inbox': {'WatchPaths': [str(INBOX), str(INBOX.parent), str(LEGACY_INBOX), str(LEGACY_INBOX.parent)],
+              'StartInterval': 600},
     'mail': {'StartInterval': 1800, 'RunAtLoad': True},
     'morning': {'StartCalendarInterval': {'Hour': 7, 'Minute': 0}},
     'maintain': {'StartCalendarInterval': {'Hour': 4, 'Minute': 30}},

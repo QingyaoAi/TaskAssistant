@@ -6,7 +6,7 @@
 import Foundation
 
 let project = Bundle.main.object(forInfoDictionaryKey: "AssistantProject") as? String
-    ?? "\(NSHomeDirectory())/Agent Workspace/个人助理"
+    ?? "\(NSHomeDirectory())/Agent Tools/TaskAssistant"
 
 let child = Process()
 child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")

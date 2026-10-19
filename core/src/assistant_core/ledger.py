@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS runs (
   detail      TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_job ON runs(job, started_at);
+CREATE TABLE IF NOT EXISTS today (
+  mirror_id  TEXT PRIMARY KEY,          -- Today 清单里那条副本的 id
+  key        TEXT NOT NULL,             -- <清单>#<原任务 id 的哈希>，也写在副本备注里
+  src_list   TEXT NOT NULL,
+  src_id     TEXT NOT NULL,
+  title      TEXT NOT NULL,             -- 原任务标题：原任务被挪走时按它找
+  status     TEXT NOT NULL,             -- open | done（勾掉）| dismissed（你删了）| removed（不该放了）
+  added_on   TEXT NOT NULL,             -- 本地日期 YYYY-MM-DD
+  closed_on  TEXT
+);
+CREATE INDEX IF NOT EXISTS today_status ON today(status, closed_on);
 """
 
 
@@ -172,6 +183,27 @@ class Ledger:
             db.execute('INSERT INTO watermarks(source, value, updated_at) VALUES (?,?,?) '
                        'ON CONFLICT(source) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
                        (source, value, now_iso()))
+
+    # ---- Today 清单的副本 ---------------------------------------------------
+    def today_open(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM today WHERE status='open' ORDER BY added_on").fetchall()
+
+    def today_known(self, mirror_id: str) -> bool:
+        return self.db.execute('SELECT 1 FROM today WHERE mirror_id=?', (mirror_id,)).fetchone() is not None
+
+    def today_closed_keys(self, day: str) -> set[str]:
+        """这一天勾掉或删掉的：当天不再放回来。"""
+        return {r[0] for r in self.db.execute(
+            "SELECT key FROM today WHERE status IN ('done','dismissed') AND closed_on=?", (day,))}
+
+    def today_add(self, mirror_id: str, src: dict, day: str) -> None:
+        with self.tx() as db:
+            db.execute("INSERT OR IGNORE INTO today(mirror_id, key, src_list, src_id, title, status, added_on) "
+                       "VALUES (?,?,?,?,?,'open',?)", (mirror_id, src['key'], src['list'], src['id'], src['title'], day))
+
+    def today_close(self, mirror_id: str, status: str, day: str) -> None:
+        with self.tx() as db:
+            db.execute('UPDATE today SET status=?, closed_on=? WHERE mirror_id=?', (status, day, mirror_id))
 
     # ---- 运行记录 ----------------------------------------------------------
     def run_start(self, job: str) -> int:

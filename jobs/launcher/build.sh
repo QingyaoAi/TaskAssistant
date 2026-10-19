@@ -30,7 +30,7 @@ cat > "$BUILD/$NAME.app/Contents/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key>      <string>13.0</string>
   <key>AssistantProject</key>            <string>$PROJECT</string>
   <key>NSFileProviderDomainUsageDescription</key>
-  <string>读取 iCloud 云盘里「快捷指令/个人助理/inbox」中你从手机存来的截图和文字，整理成待办。</string>
+  <string>读取 iCloud 云盘里「快捷指令/TaskAssistant/inbox」中你从手机存来的截图和文字，整理成待办。</string>
 </dict>
 </plist>
 EOF

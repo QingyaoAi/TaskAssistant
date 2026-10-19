@@ -97,9 +97,18 @@ def test_reminder_two_days_before_explicit_deadlines():
 # ---- 收件箱 -------------------------------------------------------------
 @pytest.fixture
 def cfg(tmp_path):
-    raw = dict(DEFAULTS, inbox_dir=str(tmp_path / 'inbox'))
+    raw = dict(DEFAULTS, inbox_dir=str(tmp_path / 'inbox'), legacy_inbox_dirs=[])
     (tmp_path / 'inbox').mkdir()
     return Config(raw)
+
+
+def test_sources_include_legacy_folder_and_twins(tmp_path):
+    docs = tmp_path / 'Documents'
+    new, old, twin = docs / 'TaskAssistant' / 'inbox', docs / '个人助理' / 'inbox', docs / 'TaskAssistant 2' / 'inbox'
+    for d in (new, old, twin):
+        d.mkdir(parents=True)
+    found = inbox.sources(Config(dict(DEFAULTS, inbox_dir=str(new), legacy_inbox_dirs=[str(old)])))
+    assert {new, new.parent, twin, twin.parent, old, old.parent} <= set(found)
 
 
 def _touch(cfg, name, data=b'x'):
@@ -181,3 +190,112 @@ def test_ledger_two_phase_and_release(tmp_path):
     assert led.release('b1', 'x') == 'failed'          # 第三次认领后还没完成：失败
     led.set_watermark('mail:x', '2026-10-18T00:00:00Z')
     assert led.watermark('mail:x') == '2026-10-18T00:00:00Z'
+
+
+# ---- Today 清单 ---------------------------------------------------------
+class FakeToDo:
+    """内存里的 To Do，接口同 mstodo MCP（只实现 today.py 用到的）。"""
+
+    def __init__(self):
+        self.lists: dict[str, dict[str, dict]] = {}
+        self.n = 0
+
+    def add(self, lst, title, due=None, note=''):
+        self.n += 1
+        tid = f'id-{self.n}'
+        self.lists.setdefault(lst, {})[tid] = {'id': tid, 'title': title, 'due': due, 'completed': False, 'note': note}
+        return tid
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def call(self, tool, args=None):
+        from assistant_core.mcpclient import McpError
+        args = args or {}
+        if tool == 'list_lists':
+            return [{'name': n} for n in self.lists]
+        if tool == 'create_list':
+            self.lists.setdefault(args['name'], {})
+            return {}
+        if args['list'] not in self.lists:
+            raise McpError(f"no list {args['list']}")
+        tasks = self.lists[args['list']]
+        if tool == 'list_tasks':
+            want = args.get('status', 'open')
+            return {'tasks': [dict(t) for t in reversed(tasks.values())
+                              if want == 'all' or t['completed'] == (want == 'completed')]}
+        if tool == 'create_task':
+            return {'id': self.add(args['list'], args['title'], args.get('due_date'), args.get('note', ''))}
+        if args['task_id'] not in tasks:
+            raise McpError('not found')
+        if tool == 'get_task':
+            return {'task': dict(tasks[args['task_id']])}
+        if tool == 'update_task':
+            tasks[args['task_id']].update({k: v for k, v in args.items() if k in ('title', 'completed', 'due')})
+            return {}
+        if tool == 'delete_task':
+            del tasks[args['task_id']]
+            return {}
+        raise AssertionError(tool)
+
+    def titles(self, lst, completed=False):
+        return sorted(t['title'] for t in self.lists[lst].values() if t['completed'] == completed)
+
+
+def test_today_list_mirrors_my_day(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import timedelta
+    from assistant_core import today, todo
+    fake = FakeToDo()
+    monkeypatch.setattr(todo, 'client', lambda cfg: fake)
+    lists = dict(DEFAULTS['lists'], allowed=['Academic-ToDo'], inbox='Inbox-ToDo', today='Today')
+    cfg = Config(dict(DEFAULTS, lists=lists))
+    led = Ledger(tmp_path / 'l.db')
+    day = SUNDAY
+    iso = lambda n: (day + timedelta(days=n)).isoformat()  # noqa: E731
+    a = fake.add('Academic-ToDo', '交审稿意见', iso(0))
+    fake.add('Inbox-ToDo', '回王老师', iso(1))
+    fake.add('Academic-ToDo', '写综述', iso(3))                 # 今天看还太远
+    d = fake.add('Academic-ToDo', '报销', iso(-3))              # 过期 3 天
+    fake.add('Academic-ToDo', '早就过期', iso(-30))             # 过期太久
+    fake.add('Academic-ToDo', '没截止')
+    fake.add('Today', '我自己加的')                              # 你自己放进 Today 的，不碰
+    run = lambda d: asyncio.run(today.refresh(cfg, led, today=d))  # noqa: E731
+
+    assert run(day)['added'] == 3
+    assert fake.titles('Today') == sorted(['交审稿意见 · 今天截止', '我自己加的', '回王老师 · 明天截止', '报销 · 已过期 3 天'])
+    assert run(day)['added'] == 0                                # 再跑一次不重复
+
+    mirror = {t['title']: t['id'] for t in fake.lists['Today'].values()}
+    fake.lists['Today'][mirror['交审稿意见 · 今天截止']]['completed'] = True   # 在 Today 里勾掉
+    del fake.lists['Today'][mirror['回王老师 · 明天截止']]                      # 在 Today 里删掉
+    r = run(day)
+    assert (r['done'], r['dismissed'], r['added']) == (1, 1, 0)
+    assert fake.lists['Academic-ToDo'][a]['completed']            # 原任务也完成了
+    assert '回王老师 · 明天截止' not in fake.titles('Today')        # 当天不放回来
+
+    fake.lists['Academic-ToDo'][d]['due'] = iso(10)              # 原任务改了截止日
+    r = run(day + timedelta(days=1))                             # 第二天
+    assert r['removed'] == 1
+    assert fake.titles('Today') == sorted(['回王老师 · 今天截止', '我自己加的',      # 删掉的第二天还该处理：放回来
+                                          '写综述 · 后天截止'])                # 进了两天的窗口
+    assert fake.titles('Today', completed=True) == ['交审稿意见 · 今天截止']
+
+
+def test_today_adopts_copy_missing_from_ledger(tmp_path, monkeypatch):
+    import asyncio
+    from assistant_core import today, todo
+    fake = FakeToDo()
+    monkeypatch.setattr(todo, 'client', lambda cfg: fake)
+    cfg = Config(dict(DEFAULTS, lists=dict(DEFAULTS['lists'], allowed=['Academic-ToDo'], inbox='Inbox-ToDo')))
+    led = Ledger(tmp_path / 'l.db')
+    fake.lists['Inbox-ToDo'] = {}
+    src_id = fake.add('Academic-ToDo', '交审稿意见', SUNDAY.isoformat())
+    src = {'key': today.key_of('Academic-ToDo', src_id), 'list': 'Academic-ToDo', 'title': '交审稿意见',
+           'due': SUNDAY.isoformat()}
+    fake.add('Today', today.mirror_title(src, SUNDAY), note=today.mirror_note(src))   # 建了副本但没来得及记账
+    assert asyncio.run(today.refresh(cfg, led, today=SUNDAY))['added'] == 0
+    assert len(led.today_open()) == 1

@@ -1,10 +1,11 @@
 """命令行：MCP 服务器入口，以及作业调度器调用的不需要模型的步骤。
 
     assistant-core serve                 以 stdio 运行 MCP 服务器（dsh profile 里挂这个）
-    assistant-core init                  建账本、建 Inbox-ToDo / Assistant 清单
+    assistant-core init                  建账本、建 Inbox-ToDo / Today 清单
     assistant-core ready inbox|mail      有没有要处理的（0 有，1 没有，3 Thunderbird 不可用）
     assistant-core finalize inbox|mail   作业结束：没处理完的批次放回队列
-    assistant-core brief [--print]       生成并发布早上的简报
+    assistant-core today                 对齐 Today 清单（今天该处理的放进来，勾掉的同步回原任务）
+    assistant-core brief [--print]       生成早上的简报（只存在 state/briefs/）
     assistant-core maintain              重试未写入的任务、清理过期文件、备份账本
     assistant-core status                看看最近的情况
     assistant-core run-start <job> / run-finish <id> <status> [detail]
@@ -12,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import sys
 import time
@@ -39,7 +41,7 @@ def cmd_init(cfg) -> int:
 
     async def lists():
         async with todo.client(cfg) as c:
-            return await todo.ensure_lists(c, [cfg.lists['inbox'], cfg.lists['brief']])
+            return await todo.ensure_lists(c, [cfg.lists['inbox'], cfg.lists['today']])
 
     created = asyncio.run(lists())
     print(json.dumps({'db': str(cfg.db_path), 'inbox': str(cfg.inbox_dir), 'lists_created': created},
@@ -75,6 +77,15 @@ def cmd_finalize(cfg, what: str) -> int:
             inbox.move_out(row['batch_id'], 'failed')
         out.append({'batch_id': row['batch_id'], 'status': status})
     print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
+def cmd_today(cfg) -> int:
+    from . import today
+    # 早上的作业、收件箱和邮件作业都会调；同时跑会建出重复的副本，所以排队。
+    with open(state_dir('locks') / 'today.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        print(today.summary(asyncio.run(today.refresh(cfg, _ledger(cfg)))))
     return 0
 
 
@@ -156,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ready(cfg, rest[0], '--wait' in rest)
     if cmd == 'finalize' and rest and rest[0] in ('inbox', 'mail'):
         return cmd_finalize(cfg, rest[0])
+    if cmd == 'today':
+        return cmd_today(cfg)
     if cmd == 'brief':
         from . import brief
         print(asyncio.run(brief.run(cfg, _ledger(cfg), dry_run='--print' in rest)))
